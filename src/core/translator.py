@@ -8,8 +8,9 @@ import os # Added for environment variable access
 import re
 from typing import List, Dict, Any, Optional, Union
 
-# Update imports for Mistral AI client using new API
-from mistralai import Mistral, UserMessage
+# Update imports for Mistral AI client using the correct API for version 0.4.2
+from mistralai.client import MistralClient
+from mistralai.models.chat_completion import ChatMessage
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ async def translate_with_mistral_api(text_to_translate: str, target_lang: str = 
     
     while retry_count < max_retries:
         try:
-            client = Mistral(api_key=MISTRAL_API_KEY)
+            client = MistralClient(api_key=MISTRAL_API_KEY)
 
             # Improved prompt for better Gujarati translation without English text
             prompt = f"""Translate the following English text to Gujarati.
@@ -143,7 +144,7 @@ English text: "{text_to_translate}"
 """
             
             messages = [
-                UserMessage(content=prompt)
+                ChatMessage(role="user", content=prompt)
             ]
 
             logger.info(f"Sending translation request to Mistral API for text: '{text_to_translate[:50]}...' (Attempt {retry_count + 1})")
@@ -152,10 +153,10 @@ English text: "{text_to_translate}"
             loop = asyncio.get_event_loop()
             chat_response = await loop.run_in_executor(
                 None,  # Uses the default ThreadPoolExecutor
-                lambda: client.chat.complete(model=MISTRAL_MODEL, messages=messages)
+                lambda: client.chat(model=MISTRAL_MODEL, messages=messages)
             )
 
-            if chat_response and chat_response.choices:
+            if chat_response and hasattr(chat_response, 'choices') and chat_response.choices:
                 translated_text = chat_response.choices[0].message.content.strip()
                 
                 # Clean up the response
@@ -205,7 +206,7 @@ English text: "{text_to_translate}"
                     retry_count += 1
                     await asyncio.sleep(REQUEST_DELAY_SECONDS)
                     last_api_call_time = time.monotonic()
-                    messages = [UserMessage(content=retry_prompt)]
+                    messages = [ChatMessage(role="user", content=retry_prompt)]
                     continue
                 
                 logger.info(f"Successfully translated to Gujarati: '{translated_text[:50]}...' (Attempt {retry_count + 1})")
