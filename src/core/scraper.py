@@ -354,23 +354,7 @@ class AsyncDataScraper:
                         logger.error(f"Error marking URL as processed: {e}")
             else:
                 logger.warning(f"No questions found at URL: {url}")
-                
-                # Optionally mark URL as processed but with has_data=False
-                if self.processed_urls_collection is not None:
-                    try:
-                        self.processed_urls_collection.update_one(
-                            {"url": url},
-                            {"$set": {
-                                "url": url, 
-                                "processed_at": dt.now(),
-                                "question_count": 0,
-                                "has_data": False
-                            }},
-                            upsert=True
-                        )
-                        logger.info(f"Marked URL as processed with no data: {url}")
-                    except Exception as e:
-                        logger.error(f"Error marking URL as processed: {e}")
+                # Do not mark URLs without data as processed, so they will be retried on future runs
             
             return questions
             
