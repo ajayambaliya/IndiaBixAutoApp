@@ -60,10 +60,10 @@ class AsyncDataScraper:
     
     def get_processed_urls(self) -> Set[str]:
         """
-        Get set of already processed URLs
+        Get set of already processed URLs that had data
         
         Returns:
-            Set of URLs that have already been processed
+            Set of URLs that have already been processed and had data
         """
         processed_urls = set()
         
@@ -72,10 +72,15 @@ class AsyncDataScraper:
             return processed_urls
         
         try:
-            # Get all processed URLs from MongoDB
-            cursor = self.processed_urls_collection.find({}, {"url": 1, "_id": 0})
+            # Get only processed URLs that had data
+            cursor = self.processed_urls_collection.find(
+                {"has_data": True}, 
+                {"url": 1, "_id": 0}
+            )
             for doc in cursor:
                 processed_urls.add(doc["url"])
+                
+            logger.info(f"Found {len(processed_urls)} previously processed URLs with data")
         except Exception as e:
             logger.error(f"Error getting processed URLs: {e}")
         
@@ -309,33 +314,63 @@ class AsyncDataScraper:
             # Fetch URL content using the provided session
             html_content = await self.fetch_url(url, session)
             if not html_content:
+                logger.warning(f"No content found at URL: {url}")
                 return []
             
             # Extract questions
             questions = self.extract_question_data(html_content, url)
             
-            # Store questions in database if MongoDB is connected
-            if questions and self.questions_collection is not None:
-                for question in questions:
+            # Only store questions and mark URL as processed if questions were found
+            if questions:
+                logger.info(f"Found {len(questions)} questions at URL: {url}")
+                
+                # Store questions in database if MongoDB is connected
+                if self.questions_collection is not None:
+                    for question in questions:
+                        try:
+                            self.questions_collection.update_one(
+                                {"id": question["id"]},
+                                {"$set": question},
+                                upsert=True
+                            )
+                        except Exception as e:
+                            logger.error(f"Error storing question in database: {e}")
+                
+                # Mark URL as processed if MongoDB is connected
+                if self.processed_urls_collection is not None:
                     try:
-                        self.questions_collection.update_one(
-                            {"id": question["id"]},
-                            {"$set": question},
+                        self.processed_urls_collection.update_one(
+                            {"url": url},
+                            {"$set": {
+                                "url": url, 
+                                "processed_at": dt.now(),
+                                "question_count": len(questions),
+                                "has_data": True
+                            }},
                             upsert=True
                         )
+                        logger.info(f"Marked URL as processed: {url} with {len(questions)} questions")
                     except Exception as e:
-                        logger.error(f"Error storing question in database: {e}")
-            
-            # Mark URL as processed if MongoDB is connected
-            if self.processed_urls_collection is not None:
-                try:
-                    self.processed_urls_collection.update_one(
-                        {"url": url},
-                        {"$set": {"url": url, "processed_at": dt.now()}},
-                        upsert=True
-                    )
-                except Exception as e:
-                    logger.error(f"Error marking URL as processed: {e}")
+                        logger.error(f"Error marking URL as processed: {e}")
+            else:
+                logger.warning(f"No questions found at URL: {url}")
+                
+                # Optionally mark URL as processed but with has_data=False
+                if self.processed_urls_collection is not None:
+                    try:
+                        self.processed_urls_collection.update_one(
+                            {"url": url},
+                            {"$set": {
+                                "url": url, 
+                                "processed_at": dt.now(),
+                                "question_count": 0,
+                                "has_data": False
+                            }},
+                            upsert=True
+                        )
+                        logger.info(f"Marked URL as processed with no data: {url}")
+                    except Exception as e:
+                        logger.error(f"Error marking URL as processed: {e}")
             
             return questions
             
@@ -427,16 +462,29 @@ class AsyncDataScraper:
                     today = dt.now()
                     year, month = today.year, today.month
                 
-                # Get the last day of the month
-                try:
-                    if month == 12:
-                        next_month = dt(year + 1, 1, 1)
-                    else:
-                        next_month = dt(year, month + 1, 1)
-                    last_day = (next_month - timedelta(days=1)).day
-                except:
-                    # Fallback to calendar module
-                    last_day = calendar.monthrange(year, month)[1]
+                # Get the current date for limiting URL generation
+                current_date = dt.now()
+                
+                # If the specified month is in the future or is the current month,
+                # limit URL generation to the current date
+                if (year > current_date.year or 
+                    (year == current_date.year and month > current_date.month)):
+                    logger.warning(f"Specified month {year}-{month:02d} is in the future. No URLs to process.")
+                    return []
+                elif (year == current_date.year and month == current_date.month):
+                    # For current month, only generate URLs up to current day
+                    last_day = current_date.day
+                else:
+                    # For past months, generate URLs for all days
+                    try:
+                        if month == 12:
+                            next_month = dt(year + 1, 1, 1)
+                        else:
+                            next_month = dt(year, month + 1, 1)
+                        last_day = (next_month - timedelta(days=1)).day
+                    except:
+                        # Fallback to calendar module
+                        last_day = calendar.monthrange(year, month)[1]
                 
                 logger.info(f"Generating URLs for {year}-{month:02d} from day 1 to day {last_day}")
                 
@@ -481,7 +529,8 @@ class AsyncDataScraper:
                 
                 # Flatten the list of lists
                 for questions in results:
-                    all_questions.extend(questions)
+                    if questions:  # Only add to all_questions if there are actually questions
+                        all_questions.extend(questions)
             
             logger.info(f"Processed {len(all_questions)} questions from {len(urls_to_process)} URLs")
                 

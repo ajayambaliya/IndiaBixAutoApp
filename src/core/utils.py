@@ -169,7 +169,7 @@ def setup_mongodb_connection(mongo_uri: str) -> Optional[Dict[str, Any]]:
         return None
 
 def get_processed_urls(mongo_uri: Optional[str] = None) -> Set[str]:
-    """Get all previously processed URLs from MongoDB"""
+    """Get all previously processed URLs from MongoDB that had data"""
     if not mongo_uri:
         return set()
         
@@ -178,8 +178,12 @@ def get_processed_urls(mongo_uri: Optional[str] = None) -> Set[str]:
         db = client['indiabixauto']
         processed_urls_collection = db['scraped_urls']
         
-        processed_urls = {doc["url"] for doc in processed_urls_collection.find({}, {"url": 1})}
-        logger.info(f"Found {len(processed_urls)} previously processed URLs in MongoDB")
+        # Only get URLs that had data
+        processed_urls = {doc["url"] for doc in processed_urls_collection.find(
+            {"has_data": True}, 
+            {"url": 1}
+        )}
+        logger.info(f"Found {len(processed_urls)} previously processed URLs with data in MongoDB")
         return processed_urls
     except Exception as e:
         logger.error(f"Error retrieving processed URLs from MongoDB: {e}")
@@ -198,11 +202,12 @@ def mark_url_as_processed(mongo_connection: Optional[Dict[str, Any]], url: str,
             {"$set": {
                 "url": url,
                 "processed_at": datetime.now(),
-                "question_count": question_count
+                "question_count": question_count,
+                "has_data": question_count > 0
             }},
             upsert=True
         )
-        logger.info(f"Marked URL as processed: {url}")
+        logger.info(f"Marked URL as processed: {url} with {question_count} questions")
         return True
     except errors.PyMongoError as e:
         logger.error(f"Error marking URL as processed: {e}")
